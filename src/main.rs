@@ -1,18 +1,20 @@
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs;
+use std::time::Duration;
 use dotenv::dotenv;
 
 #[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<Message<'a>>,
+struct ChatRequest {
+    model: String,
+    messages: Vec<Message>,
 }
 
 #[derive(Serialize)]
-struct Message<'a> {
-    role: &'a str,
-    content: &'a str,
+struct Message {
+    role: String,
+    content: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -36,14 +38,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = env::var("OPENROUTER_API_KEY")
         .expect("OPENROUTER_API_KEY not set in environment variables");
 
-    let client = Client::new();
+    // ---- 1. Get file path from command line ----
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <input-file>", args[0]);
+        std::process::exit(1);
+    }
+    let filename = &args[1];
+
+    // ---- 2. Read file content ----
+    let file_content = fs::read_to_string(filename)?;
+
+    // Optional: log length so you see how big the prompt is
+    println!("Read file `{}` ({} bytes)", filename, file_content.len());
+
+    // ---- 3. Build the prompt ----
+    let prompt = format!(
+        "Format this content into HTML:\n\n{}",
+        file_content
+    );
+
     let url = "https://openrouter.ai/api/v1/chat/completions";
 
+    // ---- 4. Client with a longer timeout ----
+    let client = Client::builder()
+        .timeout(Duration::from_secs(300)) // 5 minutes, adjust as needed
+        .build()?;
+
     let request = ChatRequest {
-        model: "tngtech/deepseek-r1t2-chimera:free", // ✅ you can change this to any OpenRouter model
+        model: "tngtech/deepseek-r1t2-chimera:free".to_string(),
         messages: vec![Message {
-            role: "user",
-            content: "Hello World",
+            role: "user".to_string(),
+            content: prompt,
         }],
     };
 
@@ -54,14 +80,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .json(&request)
         .send()?;
 
-    let text = res.text()?;
+    let text = res.text()?; // this was timing out before
     println!("Raw response:\n{}\n", text);
 
-    // Try parsing into our struct
     let parsed: Result<ChatResponse, _> = serde_json::from_str(&text);
     match parsed {
         Ok(response) => {
-            println!("Assistant: {}", response.choices[0].message.content);
+            println!("{}", response.choices[0].message.content);
         }
         Err(e) => {
             eprintln!("Failed to parse response: {}", e);
